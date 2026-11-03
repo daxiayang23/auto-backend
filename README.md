@@ -1,76 +1,181 @@
-# React + TypeScript + Vite
+# AutoBackend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+可视化搭建后台管理系统：用**字段元数据**自动派生出 CRUD 页面、菜单和数据大屏，编辑模式下所有元素都可以直接点选修改。
 
-Currently, two official plugins are available:
+核心思路是 **「生成优先，编辑兜底」**：
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 未做任何配置的页面，由模型实时派生（面包屑 → 页头 → 搜索框 → 筛选框 → 数据表格；未绑定模型的菜单默认派生「概览大屏」）；
+- 第一次增删组件或修改属性时，才把派生结果固化成可编辑的页面配置；
+- 「恢复默认页面」随时删掉覆盖配置，回到自动生成。
 
-## React Compiler
+整套配置（菜单 / 模型 / 页面组件）是一份可 JSON 序列化的 `ProjectSchema`，支持导出快照、校验后导入。
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+## 快速开始
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+需要 Node.js 20.19+（Vite 8 要求）与 pnpm。
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
+```bash
+pnpm install
+pnpm dev
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+打开 `http://localhost:5173`，在启动页点「启动」进入 `/layout`。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x';
-import reactDom from 'eslint-plugin-react-dom';
+| 命令            | 说明                           |
+| --------------- | ------------------------------ |
+| `pnpm dev`      | 启动开发服务器                 |
+| `pnpm build`    | 类型检查（`tsc -b`）+ 生产构建 |
+| `pnpm preview`  | 预览构建产物                   |
+| `pnpm lint`     | ESLint 检查                    |
+| `pnpm lint:fix` | ESLint 自动修复                |
+| `pnpm format`   | Prettier 格式化                |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
+## 界面速览
+
+- **顶栏**：项目名 / 当前菜单；「预览 · 编辑」模式切换；编辑态下额外提供 **导出 Schema**、**导入 Schema** 两个按钮。
+- **左侧栏**（编辑态三个 Tab）：
+  - **菜单**：自绘菜单树，双击改名、点击换图标、新增子菜单/顶级菜单、删除、恢复默认，并支持拖拽排序（同层排序 + 左右拖动调整层级，禁止拖进自身子树）。
+  - **模型**：模型列表，新增 / 删除 / 恢复默认；点选模型后主区进入字段表格。
+  - **组件**：22 种内置组件按分类陈列，带搜索；单例组件已添加时置灰。
+- **中间主区**：预览态渲染真实页面；编辑态显示页面画布（组件逐个选中、拖拽排序、上移下移、显隐、删除、模板套用）或模型的字段表格。
+- **右侧属性面板**：按选中元素类型自动切换表单 —— 菜单 / 页面 / 模型 / 字段 / 组件。组件属性表单由注册中心的 `propDefs` 元数据自动生成，新增组件无需写表单代码。
+
+编辑态下所有元素外面套一层虚线可编辑壳，工作区铺点阵背景，与预览态明确区分；预览态不留任何编辑痕迹。
+
+## 已实现能力
+
+### 模型与字段
+
+- 模型增删改查、主键切换、删除时自动清理菜单上的模型引用
+- 字段增删改查、上下排序、搜索过滤；可直接改 key（非法标识符或与其它字段重复会拦截标红）、名称、类型
+- 每个字段可配表格列 / 筛选项 / 新增编辑 / 必填开关；类型切换时自动归一化配置（切枚举补选项、切关联配目标模型与展示字段、切走清残留）
+- 枚举选项（值 / 显示名 / 颜色）可视化编辑
+- 8 种字段类型：`string` `text` `number` `boolean` `enum` `date` `datetime` `relation`
+
+### 页面编排
+
+- 22 种内置组件，按序堆叠；点击选中，右侧改属性，画布即时更新
+- 组件块拖拽排序（dnd-kit，仅手柄触发，松手一次性提交），同时保留上移/下移按钮
+- 6 套页面模板一键套用，套用后可继续微调；需要模型的模板在未绑定模型时禁用
+- 页面级运行时统一管理搜索关键字、筛选条件、分页排序与 CRUD：搜索框 / 筛选框 / 日期筛选会真实过滤表格，新增 / 编辑 / 删除 / 导出 CSV 可用
+
+### 数据聚合
+
+- 指标卡每项可设「数值来源」：手填值，或对当前模型字段做 **总数 / 求和 / 平均 / 最大 / 最小 / 去重数**，统计字段下拉动态列出模型字段
+- 图表支持两种数据来源：绑定模型（按字段分组，可对数值字段求和/平均）或静态手填数据；柱状 / 折线 / 饼图均为内置 SVG，无额外图表依赖
+- 未绑定模型的页面自动回退静态模式，指标卡不显示伪真实数据
+
+### Schema 快照
+
+- 编辑态顶栏导出整份 `ProjectSchema` 为 JSON
+- 导入时走同一套 zod 校验，非法 Schema / 坏 JSON 会给出具体错误且**不替换**当前项目；合法则整份替换并重置到第一个可用页面
+
+## 内置组件（22 种）
+
+| 分类            | 组件                                                                 |
+| --------------- | -------------------------------------------------------------------- |
+| 导航            | 面包屑、页头标题、标签页、步骤条                                     |
+| 布局            | 分割线、卡片、栅格卡片、留白                                         |
+| 数据展示        | 指标卡、数据表格\*、描述列表、列表、时间线、标签组、进度条组、空状态 |
+| 数据录入 / 操作 | 搜索框\*、筛选框\*、按钮组、日期筛选                                 |
+| 反馈            | 提示条                                                               |
+| 图表            | 图表（柱状 / 折线 / 饼图）                                           |
+
+\* 单例组件：每个页面最多一个。
+
+## 页面模板（6 套）
+
+| 模板       | 内容                                          | 需要模型 |
+| ---------- | --------------------------------------------- | -------- |
+| 概览大屏   | 4 指标卡 + 分布柱状图 + 最近动态列表          | 否       |
+| 监控大屏   | 3 指标卡 + 占比饼图 + 趋势折线 + 3 条进度条   | 否       |
+| 数据管理页 | 搜索 + 筛选 + 操作按钮 + 数据表格             | 是       |
+| 模型洞察   | 按当前模型的数值/枚举字段自动聚合指标卡与图表 | 是       |
+| 详情页     | 描述列表 + 时间线 + 状态标签                  | 否       |
+| 空白页     | 只留面包屑与页头                              | 否       |
+
+## 架构与目录
+
 ```
+src/
+├── schema/        # 唯一事实来源：类型定义 + zod 校验（必须可 JSON 序列化）
+├── registry/      # 纯函数映射层：字段→控件、模型→CRUD、组件注册中心、模板、聚合
+├── components/    # 页面运行时与内置组件渲染（预览 / 编辑画布共用）
+├── editor/        # 编辑态 UI：菜单树、模型字段、组件库、画布、属性面板
+├── views/         # LaunchView 启动页、StageView 工作台
+├── store/         # zustand 项目状态与所有 actions
+└── mock/          # 默认项目数据 + 内存数据表（含模糊查询、筛选、排序、CRUD）
+```
+
+约定：
+
+- **Schema 里禁止出现 ReactNode / 函数 / 类实例**，图标等一律存字符串 key，渲染时查表；
+- 三层职责分离：`schema`（类型与校验）→ `registry`（纯函数映射与生成）→ `views|components`（渲染）；
+- 数据访问统一走 `src/mock/db.ts`，将来替换为 `src/utils/request.ts`（已封装 axios 拦截器）即可接真实后端；
+- 页面渲染器与画布共用同一套组件实现，编辑态只是外面多包一层可编辑壳，不会出现「编辑时看着对、预览时不一样」。
+
+### Schema 形状
+
+```jsonc
+{
+  "schemaVersion": "1.0",
+  "id": "demo",
+  "name": "示例后台",
+  "menus": [
+    {
+      "key": "users",
+      "label": "用户管理",
+      "icon": "users",
+      "modelKey": "users",
+    },
+  ],
+  "models": [
+    {
+      "key": "users",
+      "name": "用户",
+      "primaryKey": "id",
+      "fields": [
+        { "key": "name", "label": "姓名", "type": "string", "required": true },
+      ],
+    },
+  ],
+  // 可选：不写则由模型实时派生页面
+  "pages": [
+    {
+      "menuKey": "users",
+      "blocks": [
+        {
+          "id": "blk_...",
+          "type": "pageHeader",
+          "props": { "title": "用户管理" },
+        },
+        { "id": "blk_...", "type": "dataTable", "props": { "pageSize": 10 } },
+      ],
+    },
+  ],
+}
+```
+
+`pages` 是可选的覆盖配置：缺省即自动生成，这正是「生成优先、编辑兜底」的落点。
+
+## 技术栈
+
+React 19 · TypeScript 5.9 · Vite 8 · Ant Design 6 · React Router 7 · zustand 5 · zod 4 · dnd-kit · axios · dayjs · nanoid。ESLint + Prettier + husky + lint-staged 保障提交质量。
+
+工程约定：
+
+- tsconfig 开启 `erasableSyntaxOnly` —— 不能用 `enum`，用 `as const` + union type
+- `verbatimModuleSyntax` —— 类型导入必须写 `import type`
+- React 19 + `react-hooks` v7 —— effect 体内禁止同步 `setState`
+- 新增依赖前先确认 antd 是否已自带；注意 antd v6 的部分 API 已调整（如 `Alert` 用 `title`、`Statistic` 用 `styles.content`、`List` 已弃用）
+
+## 当前边界
+
+- 数据全部来自内存 mock 表，刷新即回到默认项目；跨会话复用请用顶栏的导出 / 导入 JSON
+- 未接入真实后端、登录鉴权与权限菜单（`src/utils/request.ts` 已留好接入点）
+- 组件按序纵向堆叠，暂不做自由画布拖拽定位
+
+## 文档
+
+- [`docs/guide.md`](docs/guide.md) —— 完整设计方案（Schema、动作模型、状态流、分阶段计划）
+- [`docs/packages.md`](docs/packages.md) —— 编辑器依赖选型说明

@@ -1,39 +1,80 @@
-import { EditOutlined, EyeOutlined } from '@ant-design/icons';
-import { Menu } from 'antd';
+import { useMemo } from 'react';
+import { Menu, Segmented } from 'antd';
 import type { MenuProps } from 'antd';
-import MenuEditor from './MenuEditor';
-import PreviewMenu from './Menu';
-import { useDeskStore } from '../store/deskStore';
+import MenuTreeEditor from '../editor/MenuTreeEditor';
+import ModelListEditor from '../editor/ModelListEditor';
+import ComponentLibrary from '../editor/ComponentLibrary';
+import type { MenuSchema } from '../schema/types';
+import { MENU_ICON_MAP } from '../registry/menuIcons';
+import { useProjectStore } from '../store/projectStore';
+import type { EditorTab } from '../store/projectStore';
+
+const toMenuItems = (menus: MenuSchema[]): NonNullable<MenuProps['items']> =>
+  menus.map((menu) => ({
+    key: menu.key,
+    icon: menu.icon ? MENU_ICON_MAP[menu.icon] : undefined,
+    label: menu.label,
+    children: menu.children ? toMenuItems(menu.children) : undefined,
+  }));
+
+const collectGroupKeys = (menus: MenuSchema[]): string[] =>
+  menus.filter((menu) => menu.children?.length).map((menu) => menu.key);
 
 const Sidebar = () => {
-  const deskMode = useDeskStore((state) => state.deskMode);
-  const setDeskMode = useDeskStore((state) => state.setDeskMode);
-  const menuItems: MenuProps['items'] = [
-    { key: 'edit', label: '编辑', icon: <EditOutlined /> },
-    { key: 'preview', label: '预览', icon: <EyeOutlined /> },
-  ];
+  const menus = useProjectStore((state) => state.project.menus);
+  const deskMode = useProjectStore((state) => state.deskMode);
+  const activeMenuKey = useProjectStore((state) => state.activeMenuKey);
+  const setActiveMenuKey = useProjectStore((state) => state.setActiveMenuKey);
+  const editorTab = useProjectStore((state) => state.editorTab);
+  const setEditorTab = useProjectStore((state) => state.setEditorTab);
+
+  const items = useMemo(() => toMenuItems(menus), [menus]);
+  const openKeys = useMemo(() => collectGroupKeys(menus), [menus]);
 
   return (
-    <aside className="stage-sidebar" aria-label="组件库">
-      <div className="stage-sidebar-logo" aria-label="AutoBackend">
-        <span className="stage-sidebar-logo-mark">A</span>
-        <span>AutoBackend</span>
+    <aside className="stage-sidebar">
+      <div className="stage-logo">
+        <span className="stage-logo-mark">A</span>
+        <div className="stage-logo-text">
+          <div className="stage-logo-title">AutoBackend</div>
+          <div className="stage-logo-sub">
+            {deskMode === 'edit' ? '编辑模式' : '模型驱动后台'}
+          </div>
+        </div>
       </div>
 
-      <Menu
-        className="stage-sidebar-menu"
-        mode="horizontal"
-        aria-label="编辑器菜单"
-        selectedKeys={[deskMode]}
-        items={menuItems}
-        onClick={({ key }) => {
-          if (key === 'edit' || key === 'preview') {
-            setDeskMode(key);
-          }
-        }}
-      />
-
-      {deskMode === 'edit' ? <MenuEditor /> : <PreviewMenu />}
+      {deskMode === 'edit' ? (
+        <>
+          <Segmented<EditorTab>
+            className="stage-sidebar-tabs"
+            size="small"
+            block
+            value={editorTab}
+            onChange={setEditorTab}
+            options={[
+              { label: '菜单', value: 'menu' },
+              { label: '模型', value: 'model' },
+              { label: '组件', value: 'library' },
+            ]}
+          />
+          {editorTab === 'menu' ? (
+            <MenuTreeEditor />
+          ) : editorTab === 'model' ? (
+            <ModelListEditor />
+          ) : (
+            <ComponentLibrary />
+          )}
+        </>
+      ) : (
+        <Menu
+          className="stage-menu"
+          mode="inline"
+          items={items}
+          selectedKeys={[activeMenuKey]}
+          defaultOpenKeys={openKeys}
+          onClick={({ key }) => setActiveMenuKey(key)}
+        />
+      )}
     </aside>
   );
 };
