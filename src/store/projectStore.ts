@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import type {
+  ApiSchema,
   BlockProps,
   BlockType,
+  DatabaseSchema,
+  DbColumn,
+  DbRelation,
+  DbTable,
   FieldSchema,
   MenuSchema,
   ModelSchema,
@@ -11,6 +16,29 @@ import { validateProject } from '../schema/validate';
 import { defaultProject } from '../mock/data';
 import { createBlock } from '../registry/componentLibrary';
 import { findTemplate } from '../registry/dashboardTemplates';
+import {
+  clearApiRefsInModels,
+  createApi,
+  removeApiFromList,
+  updateApiInList,
+} from '../editor/apiOps';
+import {
+  addDbColumn as addColumnToTable,
+  addDbRelation as addRelationToDatabase,
+  addDbTable as addTableToDatabase,
+  createDbColumn,
+  createDbTable,
+  ensureDatabase,
+  moveDbTable as moveTableInDatabase,
+  removeDbColumn as removeColumnFromTable,
+  removeDbRelation as removeRelationFromDatabase,
+  removeDbTable as removeTableFromDatabase,
+  updateDbColumn as updateColumnInTable,
+  updateDbRelation as updateRelationInDatabase,
+  updateDbTable as updateTableInDatabase,
+  autoLayoutTables,
+  withDbTypeApplied,
+} from '../editor/dbOps';
 import {
   canAddBlock,
   dropPages,
@@ -56,11 +84,11 @@ if ('issues' in bootstrap) {
 
 export type DeskMode = 'edit' | 'preview';
 
-/** 编辑态左侧面板：菜单结构 / 数据模型 / 组件库 */
-export type EditorTab = 'menu' | 'model' | 'library';
+/** 编辑态左侧面板：菜单结构 / 数据模型 / 接口 / 组件库 / 数据库表编排 */
+export type EditorTab = 'menu' | 'model' | 'api' | 'library' | 'database';
 
 /** 编辑态选中的元素：kind 决定属性面板渲染哪套表单 */
-export type ElementKind = 'menu' | 'page' | 'model' | 'field' | 'block';
+export type ElementKind = 'menu' | 'page' | 'model' | 'field' | 'api' | 'block';
 
 export interface ElementRef {
   kind: ElementKind;
@@ -89,10 +117,17 @@ interface ProjectStore {
   /** 拖拽结束后一次性提交整棵树，避免拖动过程把中间态写进 Schema */
   replaceMenus: (menus: MenuSchema[]) => void;
   selectModel: (key: string) => void;
-  addModel: () => void;
+  /** 模型的建立依赖接口：必须传入已存在的 apiKey，必填 */
+  addModel: (apiKey: string, name?: string) => void;
   updateModel: (key: string, patch: Partial<ModelSchema>) => void;
   removeModel: (key: string) => void;
   resetModels: () => void;
+  /* -------------------- 接口编排 -------------------- */
+  selectApi: (key: string) => void;
+  addApi: () => void;
+  updateApi: (key: string, patch: Partial<ApiSchema>) => void;
+  /** 删除接口会清空绑定它的模型上的引用，这些模型需要重新绑定 */
+  removeApi: (key: string) => void;
   selectField: (modelKey: string, fieldKey: string) => void;
   addField: (modelKey: string) => void;
   updateField: (
@@ -103,6 +138,29 @@ interface ProjectStore {
   removeField: (modelKey: string, fieldKey: string) => void;
   moveField: (modelKey: string, fieldKey: string, offset: -1 | 1) => void;
   resetFields: (modelKey: string) => void;
+  /* -------------------- 数据库表编排 -------------------- */
+  selectedDbTableKey: string | null;
+  selectedDbRelationId: string | null;
+  selectDbTable: (key: string | null) => void;
+  selectDbRelation: (id: string | null) => void;
+  addDbTable: () => void;
+  updateDbTable: (key: string, patch: Partial<DbTable>) => void;
+  removeDbTable: (key: string) => void;
+  /** 拖拽结束时一次性提交坐标，拖动过程不写 Schema */
+  moveDbTable: (key: string, x: number, y: number) => void;
+  layoutDbTables: () => void;
+  /** column 缺省时自动造一列；新建关系「自动创建外键列」会传入拼好的列 */
+  addDbColumn: (tableKey: string, column?: DbColumn) => void;
+  updateDbColumn: (
+    tableKey: string,
+    columnKey: string,
+    patch: Partial<DbColumn>,
+  ) => void;
+  removeDbColumn: (tableKey: string, columnKey: string) => void;
+  /** 关系由视图层组装完整后提交，store 只负责落盘 */
+  addDbRelation: (relation: DbRelation) => void;
+  updateDbRelation: (id: string, patch: Partial<DbRelation>) => void;
+  removeDbRelation: (id: string) => void;
   /** 页面组件编排：所有操作都先 ensurePages 把派生页面固化下来 */
   selectBlock: (menuKey: string, blockId: string) => void;
   addBlock: (menuKey: string, type: BlockType) => void;
@@ -122,6 +180,14 @@ interface ProjectStore {
 
 /** 字段配置的初始基线，「恢复默认」以它为准 */
 const BASELINE = defaultProject;
+
+const withDatabase = (
+  project: ProjectSchema,
+  updater: (database: DatabaseSchema) => DatabaseSchema,
+): ProjectSchema => ({
+  ...project,
+  database: updater(ensureDatabase(project.database)),
+});
 
 function collectMenuKeys(menus: MenuSchema[]): string[] {
   return menus.flatMap((menu) => [
@@ -188,6 +254,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   editorTab: 'menu',
   activeMenuKey: 'users',
   selectedElement: null,
+  selectedDbTableKey: null,
+  selectedDbRelationId: null,
   setDeskMode: (deskMode) => set({ deskMode }),
   setEditorTab: (editorTab) => set({ editorTab }),
   setActiveMenuKey: (activeMenuKey) => set({ activeMenuKey }),
@@ -266,8 +334,9 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   replaceMenus: (menus) =>
     set((state) => ({ project: { ...state.project, menus } })),
   selectModel: (key) => set({ selectedElement: { kind: 'model', key } }),
-  addModel: () => {
-    const model = createModel();
+  addModel: (apiKey, name) => {
+    // 建立模型前必须先绑定接口（必填项），没有 apiKey 的模型过不了校验
+    const model = createModel(apiKey, name);
 
     set((state) => ({
       project: { ...state.project, models: [...state.project.models, model] },
@@ -381,6 +450,135 @@ export const useProjectStore = create<ProjectStore>((set) => ({
               },
         ),
       },
+    })),
+  selectApi: (key) => set({ selectedElement: { kind: 'api', key } }),
+  addApi: () =>
+    set((state) => {
+      const api = createApi(state.project.apis);
+
+      return {
+        project: { ...state.project, apis: [...state.project.apis, api] },
+        selectedElement: { kind: 'api', key: api.key },
+      };
+    }),
+  updateApi: (key, patch) =>
+    set((state) => ({
+      project: {
+        ...state.project,
+        apis: updateApiInList(state.project.apis, key, patch),
+      },
+    })),
+  removeApi: (key) =>
+    set((state) => ({
+      project: {
+        ...state.project,
+        apis: removeApiFromList(state.project.apis, key),
+        // 级联清理：被删接口上挂着的模型引用必须摘掉，否则 Schema 自相矛盾
+        models: clearApiRefsInModels(state.project.models, key),
+      },
+      selectedElement:
+        state.selectedElement?.kind === 'api' &&
+        state.selectedElement.key === key
+          ? null
+          : state.selectedElement,
+    })),
+  selectDbTable: (key) =>
+    set({ selectedDbTableKey: key, selectedDbRelationId: null }),
+  selectDbRelation: (id) =>
+    set({ selectedDbRelationId: id, selectedDbTableKey: null }),
+  addDbTable: () =>
+    set((state) => {
+      const database = ensureDatabase(state.project.database);
+      const table = createDbTable(database.tables);
+
+      return {
+        project: {
+          ...state.project,
+          database: addTableToDatabase(database, table),
+        },
+        selectedDbTableKey: table.key,
+        selectedDbRelationId: null,
+      };
+    }),
+  updateDbTable: (key, patch) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        updateTableInDatabase(database, key, patch),
+      ),
+    })),
+  removeDbTable: (key) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        removeTableFromDatabase(database, key),
+      ),
+      selectedDbTableKey:
+        state.selectedDbTableKey === key ? null : state.selectedDbTableKey,
+    })),
+  moveDbTable: (key, x, y) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        moveTableInDatabase(database, key, x, y),
+      ),
+    })),
+  layoutDbTables: () =>
+    set((state) => ({
+      project: withDatabase(state.project, autoLayoutTables),
+    })),
+  addDbColumn: (tableKey, column) =>
+    set((state) => {
+      const database = ensureDatabase(state.project.database);
+      const table = database.tables.find((item) => item.key === tableKey);
+      if (!table) return state;
+
+      const nextColumn = column ?? createDbColumn(table);
+
+      return {
+        project: withDatabase(state.project, (current) =>
+          addColumnToTable(current, tableKey, nextColumn),
+        ),
+      };
+    }),
+  updateDbColumn: (tableKey, columnKey, patch) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) => {
+        // 换类型连带清长度配置，避免 varchar 残留 decimal 的位数
+        const table = database.tables.find((item) => item.key === tableKey);
+        const column = table?.columns.find((item) => item.key === columnKey);
+        const resolved =
+          patch.dbType && column && patch.dbType !== column.dbType
+            ? { ...withDbTypeApplied(column, patch.dbType), ...patch }
+            : patch;
+
+        return updateColumnInTable(database, tableKey, columnKey, resolved);
+      }),
+    })),
+  removeDbColumn: (tableKey, columnKey) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        removeColumnFromTable(database, tableKey, columnKey),
+      ),
+    })),
+  addDbRelation: (relation) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        addRelationToDatabase(database, relation),
+      ),
+      selectedDbRelationId: relation.id,
+      selectedDbTableKey: null,
+    })),
+  updateDbRelation: (id, patch) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        updateRelationInDatabase(database, id, patch),
+      ),
+    })),
+  removeDbRelation: (id) =>
+    set((state) => ({
+      project: withDatabase(state.project, (database) =>
+        removeRelationFromDatabase(database, id),
+      ),
+      selectedDbRelationId:
+        state.selectedDbRelationId === id ? null : state.selectedDbRelationId,
     })),
   selectBlock: (menuKey, blockId) =>
     set({ selectedElement: { kind: 'block', key: blockId, owner: menuKey } }),

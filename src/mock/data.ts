@@ -1,9 +1,32 @@
-import type { ModelSchema, ProjectSchema } from '../schema/types';
+import type {
+  ApiSchema,
+  DatabaseSchema,
+  ModelSchema,
+  ProjectSchema,
+} from '../schema/types';
+
+/** 接口是模型的数据来源：默认两个接口分别喂给用户 / 订单模型 */
+export const usersApi: ApiSchema = {
+  key: 'api_users',
+  name: '用户列表',
+  method: 'get',
+  path: '/api/users',
+  description: '用户数据的增删改查入口',
+};
+
+export const ordersApi: ApiSchema = {
+  key: 'api_orders',
+  name: '订单列表',
+  method: 'get',
+  path: '/api/orders',
+  description: '订单数据的增删改查入口',
+};
 
 export const usersModel: ModelSchema = {
   key: 'users',
   name: '用户',
   description: '平台账号、角色与状态',
+  apiKey: 'api_users',
   primaryKey: 'id',
   fields: [
     {
@@ -59,6 +82,7 @@ export const ordersModel: ModelSchema = {
   key: 'orders',
   name: '订单',
   description: '交易订单与履约状态',
+  apiKey: 'api_orders',
   primaryKey: 'id',
   fields: [
     {
@@ -114,6 +138,165 @@ export const ordersModel: ModelSchema = {
   ],
 };
 
+/** 表编排默认示例：users 1—N orders，orders M—N products（中间表由 SQL 生成器派生） */
+export const defaultDatabase: DatabaseSchema = {
+  tables: [
+    {
+      key: 'tbl_users',
+      name: 'users',
+      comment: '平台账号',
+      x: 48,
+      y: 48,
+      columns: [
+        {
+          key: 'id',
+          label: '主键',
+          dbType: 'bigint',
+          primary: true,
+          autoIncrement: true,
+        },
+        {
+          key: 'name',
+          label: '姓名',
+          dbType: 'varchar',
+          length: 64,
+          nullable: false,
+        },
+        {
+          key: 'email',
+          label: '邮箱',
+          dbType: 'varchar',
+          length: 128,
+          unique: true,
+        },
+        {
+          key: 'role',
+          label: '角色',
+          dbType: 'varchar',
+          length: 16,
+          defaultValue: 'viewer',
+        },
+        {
+          key: 'status',
+          label: '状态',
+          dbType: 'varchar',
+          length: 16,
+          defaultValue: 'active',
+        },
+        {
+          key: 'verified',
+          label: '已实名',
+          dbType: 'boolean',
+          defaultValue: 'false',
+        },
+        {
+          key: 'created_at',
+          label: '创建时间',
+          dbType: 'datetime',
+          defaultValue: 'CURRENT_TIMESTAMP',
+        },
+      ],
+    },
+    {
+      key: 'tbl_orders',
+      name: 'orders',
+      comment: '交易订单',
+      x: 368,
+      y: 48,
+      columns: [
+        {
+          key: 'id',
+          label: '主键',
+          dbType: 'bigint',
+          primary: true,
+          autoIncrement: true,
+        },
+        {
+          key: 'order_no',
+          label: '订单号',
+          dbType: 'varchar',
+          length: 32,
+          nullable: false,
+          unique: true,
+        },
+        {
+          key: 'user_id',
+          label: '下单用户',
+          dbType: 'bigint',
+          nullable: false,
+        },
+        {
+          key: 'amount',
+          label: '金额',
+          dbType: 'decimal',
+          length: 12,
+          scale: 2,
+          nullable: false,
+        },
+        {
+          key: 'status',
+          label: '状态',
+          dbType: 'varchar',
+          length: 16,
+          defaultValue: 'pending',
+        },
+        { key: 'created_at', label: '下单时间', dbType: 'datetime' },
+      ],
+    },
+    {
+      key: 'tbl_products',
+      name: 'products',
+      comment: '商品',
+      x: 688,
+      y: 48,
+      columns: [
+        {
+          key: 'id',
+          label: '主键',
+          dbType: 'bigint',
+          primary: true,
+          autoIncrement: true,
+        },
+        {
+          key: 'name',
+          label: '商品名',
+          dbType: 'varchar',
+          length: 128,
+          nullable: false,
+        },
+        {
+          key: 'price',
+          label: '单价',
+          dbType: 'decimal',
+          length: 10,
+          scale: 2,
+          nullable: false,
+        },
+        { key: 'stock', label: '库存', dbType: 'int', defaultValue: '0' },
+        { key: 'created_at', label: '创建时间', dbType: 'datetime' },
+      ],
+    },
+  ],
+  relations: [
+    {
+      id: 'rel_users_orders',
+      kind: 'oneToMany',
+      fromTable: 'tbl_orders',
+      fromColumn: 'user_id',
+      toTable: 'tbl_users',
+      toColumn: 'id',
+    },
+    {
+      id: 'rel_orders_products',
+      kind: 'manyToMany',
+      fromTable: 'tbl_orders',
+      fromColumn: 'id',
+      toTable: 'tbl_products',
+      toColumn: 'id',
+    },
+  ],
+};
+
 export const defaultProject: ProjectSchema = {
   schemaVersion: '1.0',
   id: 'proj_demo',
@@ -133,6 +316,8 @@ export const defaultProject: ProjectSchema = {
     { key: 'settings', label: '系统设置', icon: 'setting' },
   ],
   models: [usersModel, ordersModel],
+  apis: [usersApi, ordersApi],
+  database: defaultDatabase,
 };
 
 export type Row = Record<string, unknown>;

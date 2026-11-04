@@ -15,6 +15,12 @@ import {
 import EnumOptionsEditor from './EnumOptionsEditor';
 import IconPicker from './IconPicker';
 import BlockInspector from './BlockInspector';
+import {
+  apiMethodOptions,
+  findApiRefModels,
+  isRouteTaken,
+  isValidApiPath,
+} from './apiOps';
 import { findMenu } from './menuOps';
 import {
   fieldTypeOptions,
@@ -133,6 +139,7 @@ const MenuInspector = ({ menuKey }: { menuKey: string }) => {
 const ModelInspector = ({ modelKey }: { modelKey: string }) => {
   const menus = useProjectStore((state) => state.project.menus);
   const models = useProjectStore((state) => state.project.models);
+  const apis = useProjectStore((state) => state.project.apis);
   const updateModel = useProjectStore((state) => state.updateModel);
   const removeModel = useProjectStore((state) => state.removeModel);
 
@@ -148,6 +155,7 @@ const ModelInspector = ({ modelKey }: { modelKey: string }) => {
   }
 
   const refs = countModelRefs(menus, model.key);
+  const boundApi = apis.find((api) => api.key === model.apiKey);
 
   return (
     <div className="inspector-body">
@@ -164,6 +172,29 @@ const ModelInspector = ({ modelKey }: { modelKey: string }) => {
             updateModel(model.key, { name: event.target.value })
           }
         />
+      </label>
+
+      <label className="inspector-field">
+        <span className="inspector-label">
+          绑定接口 <span className="inspector-required">必填</span>
+        </span>
+        <Select
+          value={model.apiKey || undefined}
+          status={boundApi ? undefined : 'error'}
+          placeholder={
+            apis.length ? '必须选择一个接口' : '当前没有接口，请先新增接口'
+          }
+          onChange={(apiKey: string) => updateModel(model.key, { apiKey })}
+          options={apis.map((api) => ({
+            value: api.key,
+            label: `${api.name}（${api.method.toUpperCase()} ${api.path}）`,
+          }))}
+        />
+        {!boundApi ? (
+          <Typography.Text type="danger" className="inspector-error">
+            模型必须绑定接口：未绑定的模型无法通过校验，页面数据也没有来源
+          </Typography.Text>
+        ) : null}
       </label>
 
       <label className="inspector-field">
@@ -200,6 +231,15 @@ const ModelInspector = ({ modelKey }: { modelKey: string }) => {
       >
         <Descriptions.Item label="key">
           <code>{model.key}</code>
+        </Descriptions.Item>
+        <Descriptions.Item label="数据来源">
+          {boundApi ? (
+            <code>
+              {boundApi.method.toUpperCase()} {boundApi.path}
+            </code>
+          ) : (
+            '未绑定'
+          )}
         </Descriptions.Item>
         <Descriptions.Item label="字段数">
           {model.fields.length}
@@ -429,6 +469,135 @@ const FieldInspector = ({
   );
 };
 
+const ApiInspector = ({ apiKey }: { apiKey: string }) => {
+  const apis = useProjectStore((state) => state.project.apis);
+  const models = useProjectStore((state) => state.project.models);
+  const updateApi = useProjectStore((state) => state.updateApi);
+  const removeApi = useProjectStore((state) => state.removeApi);
+
+  const api = apis.find((item) => item.key === apiKey);
+  const [pathDraft, setPathDraft] = useState(api?.path ?? '');
+
+  if (!api) {
+    return (
+      <Empty
+        description="该接口已不存在"
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+      />
+    );
+  }
+
+  const trimmed = pathDraft.trim();
+  const pathInvalid =
+    trimmed === '' ||
+    !isValidApiPath(trimmed) ||
+    isRouteTaken(apis, api.method, trimmed, api.key);
+
+  const commitPath = () => {
+    if (pathInvalid) {
+      setPathDraft(api.path);
+      return;
+    }
+    if (trimmed !== api.path) updateApi(api.key, { path: trimmed });
+  };
+
+  const refModels = findApiRefModels(models, api.key);
+
+  return (
+    <div className="inspector-body">
+      <Typography.Title level={5} className="inspector-title">
+        接口 · {api.name}
+      </Typography.Title>
+
+      <label className="inspector-field">
+        <span className="inspector-label">接口名称</span>
+        <Input
+          value={api.name}
+          maxLength={20}
+          onChange={(event) => updateApi(api.key, { name: event.target.value })}
+        />
+      </label>
+
+      <label className="inspector-field">
+        <span className="inspector-label">请求方法</span>
+        <Select
+          value={api.method}
+          options={apiMethodOptions}
+          onChange={(method) => updateApi(api.key, { method })}
+        />
+      </label>
+
+      <label className="inspector-field">
+        <span className="inspector-label">请求路径</span>
+        <Input
+          value={pathDraft}
+          status={pathInvalid ? 'error' : undefined}
+          placeholder="以 / 开头，例如 /api/users"
+          onChange={(event) => setPathDraft(event.target.value)}
+          onBlur={commitPath}
+          onPressEnter={commitPath}
+        />
+        {pathInvalid ? (
+          <Typography.Text type="danger" className="inspector-error">
+            路径需以 / 开头，且同方法下不能与其它接口重复
+          </Typography.Text>
+        ) : null}
+      </label>
+
+      <label className="inspector-field">
+        <span className="inspector-label">说明</span>
+        <Input.TextArea
+          rows={2}
+          value={api.description ?? ''}
+          placeholder="这个接口提供什么数据"
+          onChange={(event) =>
+            updateApi(api.key, { description: event.target.value })
+          }
+        />
+      </label>
+
+      <Descriptions
+        className="inspector-meta"
+        column={1}
+        size="small"
+        colon={false}
+      >
+        <Descriptions.Item label="key">
+          <code>{api.key}</code>
+        </Descriptions.Item>
+        <Descriptions.Item label="绑定模型">
+          {refModels.length
+            ? refModels.map((model) => model.name).join('、')
+            : '暂无模型绑定'}
+        </Descriptions.Item>
+      </Descriptions>
+
+      <Typography.Paragraph type="secondary" className="inspector-hint">
+        模型的建立依赖接口：新建模型时必须绑定一个接口，
+        模型数据的增删改查都会发往这里。预览态仍走内置 mock 数据，
+        接真实后端时按 method + path 请求。
+      </Typography.Paragraph>
+
+      <Popconfirm
+        title="删除该接口？"
+        description={
+          refModels.length
+            ? `${refModels.length} 个绑定它的模型会变成未绑定，需要重新选择接口`
+            : '接口定义会被移除'
+        }
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        onConfirm={() => removeApi(api.key)}
+      >
+        <Button danger block icon={<DeleteOutlined />}>
+          删除接口
+        </Button>
+      </Popconfirm>
+    </div>
+  );
+};
+
 const PageInspector = ({ modelKey }: { modelKey: string }) => {
   const models = useProjectStore((state) => state.project.models);
   const model = models.find((item) => item.key === modelKey);
@@ -502,6 +671,8 @@ const ElementInspector = () => {
         <MenuInspector key={`menu:${selected.key}`} menuKey={selected.key} />
       ) : selected.kind === 'model' ? (
         <ModelInspector key={`model:${selected.key}`} modelKey={selected.key} />
+      ) : selected.kind === 'api' ? (
+        <ApiInspector key={`api:${selected.key}`} apiKey={selected.key} />
       ) : selected.kind === 'field' ? (
         <FieldInspector
           key={`field:${selected.owner}:${selected.key}`}

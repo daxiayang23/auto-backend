@@ -3,8 +3,8 @@ import type { ElementRef } from '../store/projectStore';
 import { useProjectStore } from '../store/projectStore';
 
 interface EditableBoxProps {
-  /** 元素在 Schema 中的定位，点击即选中它 */
-  target: ElementRef;
+  /** 元素在 Schema 中的定位，点击即选中它；聚合面板没有单一元素时可省略 */
+  target?: ElementRef;
   /** 悬浮角标文字，例如「菜单项」「页面」 */
   label: string;
   className?: string;
@@ -42,12 +42,14 @@ const EditableBox = ({
 
   const isSelected =
     selected === true ||
-    (selectedElement?.kind === target.kind &&
-      selectedElement.key === target.key);
+    (target
+      ? selectedElement?.kind === target.kind &&
+        selectedElement.key === target.key
+      : false);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     event.stopPropagation();
-    selectElement(target);
+    if (target) selectElement(target);
     onClick?.();
   };
 

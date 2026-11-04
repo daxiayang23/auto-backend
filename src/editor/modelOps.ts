@@ -31,10 +31,12 @@ const primaryKeyField = (): FieldSchema => ({
   filterable: false,
 });
 
-export const createModel = (name = '新模型'): ModelSchema => ({
+/** 模型必须绑定接口才能建立：apiKey 是数据来源，没有接口的模型无法通过校验 */
+export const createModel = (apiKey: string, name = '新模型'): ModelSchema => ({
   key: `model_${nanoid(6)}`,
   name,
   description: '',
+  apiKey,
   primaryKey: 'id',
   fields: [primaryKeyField()],
 });

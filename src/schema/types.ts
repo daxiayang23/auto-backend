@@ -48,11 +48,33 @@ export interface FieldSchema {
   placeholder?: string;
 }
 
+/* -------------------- 接口定义 -------------------- */
+
+export const API_METHODS = ['get', 'post', 'put', 'delete', 'patch'] as const;
+
+export type ApiMethod = (typeof API_METHODS)[number];
+
+/**
+ * 接口是模型的数据来源：模型必须绑定一个接口（必填），
+ * 预览态走 mock，接真实后端时按这里的 method + path 发请求。
+ */
+export interface ApiSchema {
+  key: string;
+  /** 中文显示名，例如「用户列表」 */
+  name: string;
+  method: ApiMethod;
+  /** 请求路径，以 / 开头 */
+  path: string;
+  description?: string;
+}
+
 export interface ModelSchema {
   key: string;
   /** 中文显示名，例如「用户」 */
   name: string;
   description?: string;
+  /** 绑定的接口 key，必填：模型的数据增删改查都发往该接口 */
+  apiKey: string;
   primaryKey: string;
   fields: FieldSchema[];
 }
@@ -141,14 +163,95 @@ export interface PageSchema {
   blocks: PageBlock[];
 }
 
+/* -------------------- 数据库表编排 -------------------- */
+
+export const SQL_DIALECTS = ['mysql', 'postgresql', 'sqlite'] as const;
+
+export type SqlDialect = (typeof SQL_DIALECTS)[number];
+
+/**
+ * 逻辑列类型。Schema 里不存方言专有类型，
+ * 渲染 SQL 时由 generateSql 查映射表翻译，切换数据库零成本。
+ */
+export const DB_COLUMN_TYPES = [
+  'int',
+  'bigint',
+  'decimal',
+  'varchar',
+  'text',
+  'boolean',
+  'date',
+  'datetime',
+  'json',
+  'uuid',
+] as const;
+
+export type DbColumnType = (typeof DB_COLUMN_TYPES)[number];
+
+export const RELATION_KINDS = ['oneToOne', 'oneToMany', 'manyToMany'] as const;
+
+export type RelationKind = (typeof RELATION_KINDS)[number];
+
+export interface DbColumn {
+  /** 物理列名，snake_case 标识符 */
+  key: string;
+  /** 列备注，输出为 SQL COMMENT */
+  label?: string;
+  dbType: DbColumnType;
+  /** varchar 长度 / decimal 总位数 */
+  length?: number;
+  /** decimal 小数位 */
+  scale?: number;
+  nullable?: boolean;
+  /** 字符串默认值原样存储，生成时再决定是否加引号 */
+  defaultValue?: string;
+  /** 是否为主键的一部分（支持联合主键） */
+  primary?: boolean;
+  autoIncrement?: boolean;
+  unique?: boolean;
+  indexed?: boolean;
+}
+
+export interface DbTable {
+  /** 内部 id，关系用 key 引用，改物理表名不影响连线 */
+  key: string;
+  /** 物理表名 */
+  name: string;
+  comment?: string;
+  /** ER 画布上的坐标，属于展示配置但随 Schema 持久化，方便恢复布局 */
+  x: number;
+  y: number;
+  columns: DbColumn[];
+}
+
+export interface DbRelation {
+  id: string;
+  kind: RelationKind;
+  /** 持外键的一侧（M:N 时为参与方 A） */
+  fromTable: string;
+  fromColumn: string;
+  /** 被引用的一侧（M:N 时为参与方 B） */
+  toTable: string;
+  toColumn: string;
+}
+
+export interface DatabaseSchema {
+  tables: DbTable[];
+  relations: DbRelation[];
+}
+
 export interface ProjectSchema {
   schemaVersion: '1.0';
   id: string;
   name: string;
   menus: MenuSchema[];
+  /** 全部接口定义：模型创建必须先有接口并完成绑定 */
+  apis: ApiSchema[];
   models: ModelSchema[];
   /** 可选的页面覆盖配置；缺省即使用自动生成结果 */
   pages?: PageSchema[];
+  /** 数据库表编排；旧版本 Schema 可能没有，运行时按空库兜底 */
+  database?: DatabaseSchema;
 }
 
 /* -------------------- 生成产物 -------------------- */

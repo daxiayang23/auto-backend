@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { BLOCK_TYPES, FIELD_TYPES, MENU_ICONS } from './types';
+import {
+  API_METHODS,
+  BLOCK_TYPES,
+  DB_COLUMN_TYPES,
+  FIELD_TYPES,
+  MENU_ICONS,
+  RELATION_KINDS,
+} from './types';
 import type { MenuSchema, ProjectSchema } from './types';
 
 const enumOptionSchema = z.object({
@@ -47,11 +54,20 @@ const fieldSchema = z
     }
   });
 
+const apiSchema = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  method: z.enum(API_METHODS),
+  path: z.string().min(1).regex(/^\//, '接口路径必须以 / 开头'),
+  description: z.string().optional(),
+});
+
 const modelSchema = z
   .object({
     key: z.string().min(1),
     name: z.string().min(1),
     description: z.string().optional(),
+    apiKey: z.string().min(1, '模型必须绑定接口'),
     primaryKey: z.string().min(1),
     fields: z.array(fieldSchema).min(1, '模型至少需要一个字段'),
   })
@@ -112,16 +128,180 @@ const collectMenuKeys = (menus: MenuSchema[]): Set<string> => {
   return keys;
 };
 
+const dbColumnSchema = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, '列名必须是合法的标识符'),
+    label: z.string().optional(),
+    dbType: z.enum(DB_COLUMN_TYPES),
+    length: z.number().int().positive().optional(),
+    scale: z.number().int().min(0).optional(),
+    nullable: z.boolean().optional(),
+    defaultValue: z.string().optional(),
+    primary: z.boolean().optional(),
+    autoIncrement: z.boolean().optional(),
+    unique: z.boolean().optional(),
+    indexed: z.boolean().optional(),
+  })
+  .superRefine((column, ctx) => {
+    if (column.scale !== undefined && column.length === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['length'],
+        message: `列 ${column.key} 声明了小数位却缺少总位数`,
+      });
+    }
+  });
+
+const dbTableSchema = z
+  .object({
+    key: z.string().min(1),
+    name: z
+      .string()
+      .min(1)
+      .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, '表名必须是合法的标识符'),
+    comment: z.string().optional(),
+    x: z.number(),
+    y: z.number(),
+    columns: z.array(dbColumnSchema).min(1, '表至少需要一列'),
+  })
+  .superRefine((table, ctx) => {
+    const seen = new Set<string>();
+    table.columns.forEach((column, index) => {
+      if (seen.has(column.key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['columns', index, 'key'],
+          message: `表 ${table.name} 存在重复列 ${column.key}`,
+        });
+      }
+      seen.add(column.key);
+    });
+  });
+
+const dbRelationSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(RELATION_KINDS),
+  fromTable: z.string().min(1),
+  fromColumn: z.string().min(1),
+  toTable: z.string().min(1),
+  toColumn: z.string().min(1),
+});
+
+const databaseSchema = z
+  .object({
+    tables: z.array(dbTableSchema),
+    relations: z.array(dbRelationSchema),
+  })
+  .superRefine((database, ctx) => {
+    const tableKeys = new Set<string>();
+    database.tables.forEach((table, index) => {
+      if (tableKeys.has(table.key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['tables', index, 'key'],
+          message: `表 key ${table.key} 重复`,
+        });
+      }
+      tableKeys.add(table.key);
+    });
+
+    database.tables.forEach((table, index) => {
+      if (
+        database.tables.some(
+          (other, otherIndex) =>
+            otherIndex > index && other.name === table.name,
+        )
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['tables', index, 'name'],
+          message: `物理表名 ${table.name} 重复`,
+        });
+      }
+    });
+
+    const findTable = (key: string) =>
+      database.tables.find((table) => table.key === key);
+
+    database.relations.forEach((relation, index) => {
+      const from = findTable(relation.fromTable);
+      const to = findTable(relation.toTable);
+
+      if (!from) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['relations', index, 'fromTable'],
+          message: `关系引用了不存在的表 ${relation.fromTable}`,
+        });
+      }
+      if (!to) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['relations', index, 'toTable'],
+          message: `关系引用了不存在的表 ${relation.toTable}`,
+        });
+      }
+      if (
+        from &&
+        !from.columns.some((column) => column.key === relation.fromColumn)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['relations', index, 'fromColumn'],
+          message: `表 ${from.name} 上不存在外键列 ${relation.fromColumn}`,
+        });
+      }
+      if (
+        to &&
+        !to.columns.some((column) => column.key === relation.toColumn)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['relations', index, 'toColumn'],
+          message: `表 ${to.name} 上不存在被引用列 ${relation.toColumn}`,
+        });
+      }
+    });
+  });
+
 const projectSchema = z
   .object({
     schemaVersion: z.literal('1.0'),
     id: z.string().min(1),
     name: z.string().min(1),
     menus: z.array(menuSchema),
+    apis: z.array(apiSchema),
     models: z.array(modelSchema).min(1),
     pages: z.array(pageSchema).optional(),
+    database: databaseSchema.optional(),
   })
   .superRefine((project, ctx) => {
+    const apiKeys = new Set<string>();
+    const apiRoutes = new Set<string>();
+    project.apis.forEach((api, index) => {
+      if (apiKeys.has(api.key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['apis', index, 'key'],
+          message: `接口 key ${api.key} 重复`,
+        });
+      }
+      apiKeys.add(api.key);
+
+      const route = `${api.method.toUpperCase()} ${api.path}`;
+      if (apiRoutes.has(route)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['apis', index, 'path'],
+          message: `接口 ${route} 已存在，method + path 不能重复`,
+        });
+      }
+      apiRoutes.add(route);
+    });
+
     const modelKeys = new Set<string>();
     project.models.forEach((model, index) => {
       if (modelKeys.has(model.key)) {
@@ -132,6 +312,14 @@ const projectSchema = z
         });
       }
       modelKeys.add(model.key);
+
+      if (!apiKeys.has(model.apiKey)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['models', index, 'apiKey'],
+          message: `模型 ${model.key} 引用了不存在的接口 ${model.apiKey}`,
+        });
+      }
     });
 
     const walk = (menus: MenuSchema[], path: (string | number)[]) => {
